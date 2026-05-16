@@ -9,6 +9,7 @@ const SUPPORTED_ORIGIN_PROTOCOLS = new Set([
   "http:",
   "https:",
   "chrome-extension:",
+  "moz-extension:",
 ]);
 
 export class SecurityConfigError extends Error {
@@ -42,7 +43,7 @@ export function validateAllowedOriginValues(origins: readonly string[]): void {
 
     if (!SUPPORTED_ORIGIN_PROTOCOLS.has(parsed.protocol)) {
       throw new SecurityConfigError(
-        `ALLOWED_ORIGINS entry "${origin}" uses unsupported scheme "${parsed.protocol.replace(/:$/, "")}"; expected one of http, https, chrome-extension.`,
+        `ALLOWED_ORIGINS entry "${origin}" uses unsupported scheme "${parsed.protocol.replace(/:$/, "")}"; expected one of http, https, chrome-extension, moz-extension.`,
       );
     }
 

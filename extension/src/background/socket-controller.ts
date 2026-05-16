@@ -3,6 +3,7 @@ import { isServerMessage, PROTOCOL_VERSION } from "@bili-syncplay/protocol";
 import type { DebugLogEntry } from "../shared/messages";
 import type { ConnectionState, RoomSessionState } from "./runtime-state";
 import { getConnectionErrorMessage } from "./connection-error";
+import { getExtensionOrigin } from "../shared/extension-origin";
 import {
   shouldReconnect as shouldScheduleReconnect,
   getReconnectDelayMs,
@@ -90,7 +91,7 @@ export function createSocketController(args: {
       return;
     }
 
-    const extensionOrigin = `chrome-extension://${chrome.runtime.id}`;
+    const extensionOrigin = getExtensionOrigin();
     const connectionCheckUrl = args.buildConnectionCheckUrl(
       serverUrlResult.normalizedUrl,
     );

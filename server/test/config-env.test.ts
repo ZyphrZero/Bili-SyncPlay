@@ -142,6 +142,25 @@ test("security config accepts chrome-extension origins", () => {
   ]);
 });
 
+test("security config accepts moz-extension origins (Firefox)", () => {
+  const config = loadSecurityConfig({
+    ALLOWED_ORIGINS: "moz-extension://12345678-90ab-cdef-1234-567890abcdef",
+  });
+  assert.deepEqual(config.allowedOrigins, [
+    "moz-extension://12345678-90ab-cdef-1234-567890abcdef",
+  ]);
+});
+
+test("security config rejects moz-extension origins with a path", () => {
+  assert.throws(
+    () =>
+      loadSecurityConfig({
+        ALLOWED_ORIGINS: "moz-extension://uuid-value/popup.html",
+      }),
+    /must be a bare origin/,
+  );
+});
+
 test("security config rejects origins that include a path", () => {
   assert.throws(
     () => loadSecurityConfig({ ALLOWED_ORIGINS: "https://a.example/app" }),
