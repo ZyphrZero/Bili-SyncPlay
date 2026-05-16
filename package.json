@@ -23,7 +23,8 @@
     "typecheck": "npm run typecheck -w @bili-syncplay/protocol && npm run typecheck -w @bili-syncplay/server && npm run typecheck -w @bili-syncplay/extension",
     "build": "npm run build -w @bili-syncplay/protocol && npm run build -w @bili-syncplay/server && npm run build -w @bili-syncplay/extension",
     "pretest": "npm run build -w @bili-syncplay/protocol",
-    "test": "npm run test:audit-gate && npm run --ignore-scripts test -w @bili-syncplay/protocol && npm run --ignore-scripts test -w @bili-syncplay/server && npm run --ignore-scripts test -w @bili-syncplay/extension",
+    "test": "npm run test:audit-gate && npm run test:scripts && npm run --ignore-scripts test -w @bili-syncplay/protocol && npm run --ignore-scripts test -w @bili-syncplay/server && npm run --ignore-scripts test -w @bili-syncplay/extension",
+    "test:scripts": "node --test scripts/target-browser.test.mjs",
     "coverage": "npm run --ignore-scripts coverage -w @bili-syncplay/protocol && npm run --ignore-scripts coverage -w @bili-syncplay/server && npm run --ignore-scripts coverage -w @bili-syncplay/extension",
     "audit": "node scripts/audit-gate.mjs",
     "test:audit-gate": "node --test scripts/audit-gate.test.mjs",
@@ -32,7 +33,10 @@
     "test:server:redis": "npm run --ignore-scripts test:redis -w @bili-syncplay/server",
     "dev:server": "npm run dev -w @bili-syncplay/server",
     "build:extension": "npm run build -w @bili-syncplay/extension",
-    "build:release": "npm run build:extension && node scripts/package-release.mjs",
+    "build:extension:firefox": "npm run build -w @bili-syncplay/extension -- --target=firefox",
+    "build:release:chrome": "npm run build:extension && node scripts/package-release.mjs --target=chrome",
+    "build:release:firefox": "npm run build:extension:firefox && node scripts/package-release.mjs --target=firefox",
+    "build:release": "npm run build:release:chrome && npm run build:release:firefox",
     "release:version": "node scripts/release-version.mjs"
   },
   "devDependencies": {

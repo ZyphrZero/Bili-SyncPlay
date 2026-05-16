@@ -2,11 +2,16 @@ import { build } from "esbuild";
 import { cp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import {
+  distDirName,
+  resolveTargetBrowser,
+} from "../../scripts/target-browser.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.resolve(__dirname, "..");
 const workspaceRootDir = path.resolve(rootDir, "..");
-const distDir = path.join(rootDir, "dist");
+const targetBrowser = resolveTargetBrowser();
+const distDir = path.join(rootDir, distDirName(targetBrowser));
 const packageJsonPath = path.join(workspaceRootDir, "package.json");
 const manifestPath = path.join(rootDir, "public", "manifest.json");
 const defaultServerUrl = resolveDefaultServerUrl(
@@ -19,14 +24,58 @@ await mkdir(distDir, { recursive: true });
 const rootPackage = JSON.parse(await readFile(packageJsonPath, "utf8"));
 const manifest = JSON.parse(await readFile(manifestPath, "utf8"));
 manifest.version = rootPackage.version;
-const extensionKey = normalizeExtensionKey(
-  process.env.BILI_SYNCPLAY_EXTENSION_KEY,
-);
-
-if (extensionKey) {
-  manifest.key = extensionKey;
-} else {
+if (targetBrowser === "firefox") {
+  // Firefox 必需 add-on ID；manifest.key 是 Chrome 专属，对 Firefox 无意义。
   delete manifest.key;
+  manifest.browser_specific_settings = {
+    gecko: {
+      id: "bili-syncplay@bilibili-tools.local",
+      strict_min_version: "121.0",
+      // Firefox 新规：新扩展须声明数据收集/传输（与目的地无关，发往
+      // 用户自建服务端也算）。本扩展把同步的 B 站视频 URL
+      // （browsingActivity）与播放操作交互（websiteActivity）发往用户
+      // 配置的 WebSocket 服务端；房间码/token 为临时会话标识，昵称为
+      // 用户自填的临时假名句柄（按扩展设计意图不属 PII），故不声明
+      // personallyIdentifyingInfo；无遥测故无 technicalAndInteraction。
+      //
+      // 该键 Firefox 140（桌面）/142（Android）才识别，本扩展 min
+      // 版本为 121——旧版按"未知键忽略"处理（前向兼容、不破坏，121–139
+      // 仍正常运行，仅无数据同意 UI），140+ 强制并展示。故 web-ext lint
+      // 的 KEY_FIREFOX[_ANDROID]_UNSUPPORTED_BY_MIN_VERSION 为预期软告警，
+      // 不上调 strict_min_version（否则白丢 121–139 用户且无功能收益）。
+      data_collection_permissions: {
+        required: ["browsingActivity", "websiteActivity"],
+      },
+    },
+  };
+  // Firefox 不支持 MV3 background.service_worker（Bugzilla 1573659），
+  // 必须用 background.scripts（event page）。Firefox 121+ 才会在
+  // service_worker 存在时启动 background page，且支持 type:"module"
+  // ES module 后台脚本——与上面的 strict_min_version 对齐。
+  // 这是专用 Firefox 产物，去掉 Chrome 专属的 service_worker 键，
+  // 避免 web-ext lint 对不支持字段告警。
+  manifest.background = {
+    scripts: ["background.js"],
+    type: "module",
+  };
+  // MV3 默认 CSP 隐含 upgrade-insecure-requests，Firefox 会据此把扩展
+  // 自身发起的 ws:// 升级为 wss://（无 Chrome 那种 localhost 豁免），
+  // 导致连不上明文 WebSocket 服务端。本扩展显式支持用户配置 ws:// 服务端，
+  // 故按 Mozilla 文档显式覆盖 extension_pages CSP，去掉该升级指令；
+  // 其余沿用 MV3 默认（script-src/object-src 'self'）。
+  manifest.content_security_policy = {
+    extension_pages: "script-src 'self'; object-src 'self'",
+  };
+} else {
+  const extensionKey = normalizeExtensionKey(
+    process.env.BILI_SYNCPLAY_EXTENSION_KEY,
+  );
+
+  if (extensionKey) {
+    manifest.key = extensionKey;
+  } else {
+    delete manifest.key;
+  }
 }
 
 await Promise.all([
