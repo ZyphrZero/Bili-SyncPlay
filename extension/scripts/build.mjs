@@ -2,11 +2,16 @@ import { build } from "esbuild";
 import { cp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import {
+  distDirName,
+  resolveTargetBrowser,
+} from "../../scripts/target-browser.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.resolve(__dirname, "..");
 const workspaceRootDir = path.resolve(rootDir, "..");
-const distDir = path.join(rootDir, "dist");
+const targetBrowser = resolveTargetBrowser();
+const distDir = path.join(rootDir, distDirName(targetBrowser));
 const packageJsonPath = path.join(workspaceRootDir, "package.json");
 const manifestPath = path.join(rootDir, "public", "manifest.json");
 const defaultServerUrl = resolveDefaultServerUrl(
@@ -19,14 +24,25 @@ await mkdir(distDir, { recursive: true });
 const rootPackage = JSON.parse(await readFile(packageJsonPath, "utf8"));
 const manifest = JSON.parse(await readFile(manifestPath, "utf8"));
 manifest.version = rootPackage.version;
-const extensionKey = normalizeExtensionKey(
-  process.env.BILI_SYNCPLAY_EXTENSION_KEY,
-);
-
-if (extensionKey) {
-  manifest.key = extensionKey;
-} else {
+if (targetBrowser === "firefox") {
+  // Firefox 必需 add-on ID；manifest.key 是 Chrome 专属，对 Firefox 无意义。
   delete manifest.key;
+  manifest.browser_specific_settings = {
+    gecko: {
+      id: "bili-syncplay@bilibili-tools.local",
+      strict_min_version: "121.0",
+    },
+  };
+} else {
+  const extensionKey = normalizeExtensionKey(
+    process.env.BILI_SYNCPLAY_EXTENSION_KEY,
+  );
+
+  if (extensionKey) {
+    manifest.key = extensionKey;
+  } else {
+    delete manifest.key;
+  }
 }
 
 await Promise.all([
