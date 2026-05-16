@@ -7,6 +7,7 @@ const sourceFiles = ["**/*.{ts,js,mjs,cjs}"];
 const ignores = [
   "**/node_modules/**",
   "**/dist/**",
+  "**/dist-firefox/**",
   "**/release/**",
   "**/.tmp/**",
   "**/coverage/**",
