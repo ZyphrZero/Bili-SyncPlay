@@ -1,5 +1,7 @@
 import { escapeHtml } from "./templates.js";
 
+const PLAYBACK_STALE_AFTER_MS = 30_000;
+
 export function formatDateTime(value) {
   if (value === null || value === undefined || value === "") {
     return "—";
@@ -182,6 +184,42 @@ export function formatRelativeDuration(ms) {
   return `${Math.floor(hours / 24)} 天后`;
 }
 
+export function formatElapsedDuration(ms) {
+  if (!Number.isFinite(ms) || ms < 0) {
+    return "—";
+  }
+  const minutes = Math.floor(ms / 60_000);
+  if (minutes < 1) {
+    return "不足 1 分钟前";
+  }
+  if (minutes < 60) {
+    return `${minutes} 分钟前`;
+  }
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) {
+    return `${hours} 小时前`;
+  }
+  return `${Math.floor(hours / 24)} 天前`;
+}
+
+export function getPlaybackSyncedAt(item) {
+  if (!item?.playback) {
+    return null;
+  }
+  if (Number.isFinite(item.playback.serverTime)) {
+    return item.playback.serverTime;
+  }
+  if (Number.isFinite(item.playback.updatedAt)) {
+    return item.playback.updatedAt;
+  }
+  return Number.isFinite(item.lastActiveAt) ? item.lastActiveAt : null;
+}
+
+export function isRoomPlaybackStale(item, currentTime = Date.now()) {
+  const syncedAt = getPlaybackSyncedAt(item);
+  return syncedAt !== null && currentTime - syncedAt > PLAYBACK_STALE_AFTER_MS;
+}
+
 export function getRoomVideoSummary(item) {
   if (!item.sharedVideo) {
     return {
@@ -208,15 +246,22 @@ export function getRoomPlaybackSummary(item) {
   }
 
   const state = getPlaybackState(item.playback);
+  const syncedAt = getPlaybackSyncedAt(item);
+  const stale = isRoomPlaybackStale(item);
   return {
-    tone:
-      state === "playing"
+    tone: stale
+      ? "warning"
+      : state === "playing"
         ? "success"
         : state === "buffering"
           ? "warning"
           : "neutral",
-    primary: getPlaybackStateLabel(state),
-    secondary: `${formatPlaybackPosition(item.playback.currentTime)} · x${Number(item.playback.playbackRate || 1).toFixed(2)}`,
+    primary: stale
+      ? `${getPlaybackStateLabel(state)}（已陈旧）`
+      : getPlaybackStateLabel(state),
+    secondary: stale
+      ? `${formatPlaybackPosition(item.playback.currentTime)} · 上次同步 ${formatElapsedDuration(Date.now() - syncedAt)}`
+      : `${formatPlaybackPosition(item.playback.currentTime)} · x${Number(item.playback.playbackRate || 1).toFixed(2)}`,
   };
 }
 

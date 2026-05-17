@@ -4,8 +4,8 @@ import {
   formatDuration,
   formatJson,
   formatPlaybackPosition,
+  getPlaybackSyncedAt,
   formatRelativeDuration,
-  getPlaybackState,
   getRoomPlaybackSummary,
   getRoomOwnerSummary,
   getRoomVideoSummary,
@@ -637,6 +637,7 @@ export function createPageLoaders(options) {
     async renderRoomDetailPage(roomCode) {
       try {
         const detail = await api.getRoomDetail(roomCode);
+        const playbackSummary = getRoomPlaybackSummary(detail.room);
         return {
           meta: {
             title: `房间 ${detail.room.roomCode}`,
@@ -699,16 +700,17 @@ export function createPageLoaders(options) {
                     <div class="media-summary-title">${escapeHtml(detail.room.sharedVideo?.title || "未共享视频")}</div>
                     <div class="media-summary-meta">
                       ${detail.room.sharedVideo?.videoId ? `<span class="pill subtle">ID ${escapeHtml(detail.room.sharedVideo.videoId)}</span>` : renderEmptyValue("无视频 ID")}
-                      ${detail.room.playback ? renderResultBadge(getPlaybackState(detail.room.playback)) : renderEmptyValue("未同步")}
+                      ${detail.room.playback ? renderStatus(playbackSummary.tone, playbackSummary.primary) : renderEmptyValue("未同步")}
                     </div>
                   </div>
                   <dl class="kv">
                     <dt>标题</dt><dd>${escapeHtml(detail.room.sharedVideo?.title || "未共享")}</dd>
                     <dt>视频 ID</dt><dd>${detail.room.sharedVideo?.videoId ? `<span class="code">${escapeHtml(detail.room.sharedVideo.videoId)}</span>` : renderEmptyValue()}</dd>
                     <dt>URL</dt><dd>${detail.room.sharedVideo?.url ? `<a href="${escapeHtml(detail.room.sharedVideo.url)}" target="_blank" rel="noreferrer">${escapeHtml(detail.room.sharedVideo.url)}</a>` : renderEmptyValue()}</dd>
-                    <dt>播放状态</dt><dd>${detail.room.playback ? renderResultBadge(getPlaybackState(detail.room.playback)) : renderEmptyValue("未同步")}</dd>
+                    <dt>播放状态</dt><dd>${detail.room.playback ? renderStatus(playbackSummary.tone, playbackSummary.primary) : renderEmptyValue("未同步")}</dd>
                     <dt>当前时间</dt><dd>${detail.room.playback ? formatPlaybackPosition(detail.room.playback.currentTime) : renderEmptyValue()}</dd>
                     <dt>播放速度</dt><dd>${detail.room.playback ? `x${Number(detail.room.playback.playbackRate || 1).toFixed(2)}` : renderEmptyValue()}</dd>
+                    <dt>上次同步</dt><dd>${formatDateTime(getPlaybackSyncedAt(detail.room))}</dd>
                   </dl>
                 </section>
               </div>

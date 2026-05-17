@@ -198,6 +198,7 @@ test("rooms and events pages render direct admin ui tables", async () => {
                 playState: "playing",
                 currentTime: 12.3,
                 playbackRate: 1,
+                serverTime: Date.now(),
               },
               lastActiveAt: Date.now(),
               expiresAt: Date.now() + 60_000,
@@ -297,6 +298,7 @@ test("room detail renders playback position as media timestamp", async () => {
               playState: "playing",
               currentTime: 3723.4,
               playbackRate: 1,
+              serverTime: Date.now(),
             },
           },
           members: [],
@@ -339,6 +341,96 @@ test("room detail renders playback position as media timestamp", async () => {
   assert.equal(page.html.includes("3723.4s"), false);
   assert.equal(page.html.includes("Alice 加入了房间"), true);
   assert.equal(page.html.includes("Alice 加入了房间 · 房间 ROOM8A"), false);
+});
+
+test("room pages mark stale playback snapshots instead of presenting them as live", async () => {
+  const staleServerTime = Date.now() - 3 * 60 * 60 * 1000;
+  const pageLoaders = createPageLoaders({
+    document: createDocumentStub(),
+    location: { search: "" },
+    history: { replaceState() {} },
+    state: {
+      overviewAutoRefresh: true,
+      lastOverviewData: { instanceId: "instance-1" },
+    },
+    api: {
+      async listRooms() {
+        return {
+          items: [
+            {
+              roomCode: "ROOM8A",
+              isActive: true,
+              ownerDisplayName: "Alice",
+              ownerMemberId: "member-alice",
+              memberCount: 1,
+              sharedVideo: { title: "测试视频" },
+              playback: {
+                playState: "playing",
+                currentTime: 12.3,
+                playbackRate: 1,
+                serverTime: staleServerTime,
+              },
+              lastActiveAt: staleServerTime,
+              expiresAt: Date.now() + 60_000,
+            },
+          ],
+          pagination: { total: 1 },
+        };
+      },
+      async getRoomDetail() {
+        return {
+          instanceId: "instance-1",
+          room: {
+            roomCode: "ROOM8A",
+            isActive: true,
+            memberCount: 1,
+            instanceId: "instance-1",
+            createdAt: staleServerTime,
+            lastActiveAt: staleServerTime,
+            expiresAt: Date.now() + 60_000,
+            sharedVideo: {
+              title: "测试视频",
+              videoId: "BV1TEST",
+              url: "https://www.bilibili.com/video/BV1TEST",
+            },
+            playback: {
+              playState: "playing",
+              currentTime: 12.3,
+              playbackRate: 1,
+              serverTime: staleServerTime,
+            },
+          },
+          members: [],
+          recentEvents: [],
+        };
+      },
+    },
+    routeHref(path: string) {
+      return `/admin${path}`;
+    },
+    withDemoQuery(url: string) {
+      return url;
+    },
+    serializeQuery() {
+      return "";
+    },
+    navigate() {},
+    navigateToUrl() {},
+    rerender() {},
+    canManage() {
+      return true;
+    },
+    confirmAction() {},
+    openReasonDialog() {},
+  });
+
+  const roomsPage = await pageLoaders.renderRoomsPage();
+  const detailPage = await pageLoaders.renderRoomDetailPage("ROOM8A");
+
+  assert.equal(roomsPage.html.includes("播放中（已陈旧）"), true);
+  assert.equal(roomsPage.html.includes("上次同步 3 小时前"), true);
+  assert.equal(detailPage.html.includes("播放中（已陈旧）"), true);
+  assert.equal(detailPage.html.includes("<dt>上次同步</dt>"), true);
 });
 
 test("danger room actions require confirmed config before execution", async () => {
