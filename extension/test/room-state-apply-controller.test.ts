@@ -41,10 +41,14 @@ function createController(overrides: {
   let _pauseHoldActivated = false;
   let _acceptedHydration = false;
   const logs: string[] = [];
+  const lastAppliedVersionByActor = new Map<
+    string,
+    { serverTime: number; seq: number }
+  >();
 
   const controller = createRoomStateApplyController({
     runtimeState,
-    lastAppliedVersionByActor: new Map(),
+    lastAppliedVersionByActor,
     ignoredSelfPlaybackLogState: { key: null, at: 0 },
     localIntentGuardMs: 1_200,
     pauseHoldMs: 800,
@@ -90,6 +94,7 @@ function createController(overrides: {
   return {
     controller,
     runtimeState,
+    lastAppliedVersionByActor,
     get pauseHoldActivated() {
       return _pauseHoldActivated;
     },
@@ -402,7 +407,7 @@ test("drops deferred paused when matching playing arrives within debounce window
   }
 });
 
-test("keeps deferred paused when subsequent playing has large t-delta", async () => {
+test("drops deferred paused when a newer-versioned state arrives even if t-delta is large", async () => {
   const win = installWindowTimerStub();
   try {
     const video = createStubVideo(false);
@@ -423,10 +428,11 @@ test("keeps deferred paused when subsequent playing has large t-delta", async ()
         seq: 5,
       }) as never,
     );
-    const deferredBefore = harness.runtimeState.deferredRemotePausedState;
-    assert.equal(deferredBefore !== null, true);
+    assert.equal(harness.runtimeState.deferredRemotePausedState !== null, true);
 
-    // t-delta = 5.0 (> 0.5 threshold) → should NOT drop the deferred paused
+    // t-delta = 5.0 (not a flicker shape), but the new state has a higher
+    // version — letting the deferred fire later would clobber freshly applied
+    // state via the unconditional activeSharedUrl reset, so drop it.
     await harness.controller.applyRoomState(
       createRoomStateWithPlayback({
         url: "https://www.bilibili.com/video/BV1xx411c7mD?p=1",
@@ -437,10 +443,59 @@ test("keeps deferred paused when subsequent playing has large t-delta", async ()
       }) as never,
     );
 
+    assert.equal(harness.runtimeState.deferredRemotePausedState, null);
     assert.equal(
-      harness.runtimeState.deferredRemotePausedState,
-      deferredBefore,
+      harness.logs.some((m) => m.includes("Dropped stale deferred paused")),
+      true,
     );
+  } finally {
+    win.restore();
+  }
+});
+
+test("deferred timer is a no-op when fire-time freshness check sees a newer applied version", async () => {
+  const win = installWindowTimerStub();
+  try {
+    const video = createStubVideo(false);
+    const harness = createController({
+      video,
+      now: 30_000,
+      remotePauseDebounceMs: 250,
+    });
+    harness.runtimeState.localMemberId = "local-member";
+
+    await harness.controller.applyRoomState(
+      createRoomStateWithPlayback({
+        url: "https://www.bilibili.com/video/BV1xx411c7mD?p=1",
+        currentTime: 42,
+        playState: "paused",
+        actorId: "remote-member",
+        seq: 5,
+      }) as never,
+    );
+    assert.equal(win.scheduled.length, 1);
+    const fired = win.scheduled[0];
+
+    // Simulate that a newer (serverTime, seq) was applied for this actor
+    // while the deferred was waiting — the apply layer writes this map on
+    // every successful apply.
+    harness.lastAppliedVersionByActor.set("remote-member", {
+      serverTime: 1,
+      seq: 8,
+    });
+
+    fired.cb();
+    await Promise.resolve();
+
+    assert.equal(
+      harness.logs.some((m) =>
+        m.includes("Dropped deferred paused seq=5 at fire time"),
+      ),
+      true,
+      "fire-time freshness check should drop the stale snapshot",
+    );
+    assert.equal(harness.runtimeState.deferredRemotePausedState, null);
+    assert.equal(harness.runtimeState.deferredRemotePausedTimerId, null);
   } finally {
     win.restore();
   }
