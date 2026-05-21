@@ -35,6 +35,14 @@ export interface PlaybackState {
   currentTime: number;
   playState: PlaybackPlayState;
   syncIntent?: PlaybackSyncIntent;
+  /**
+   * Hint that this state transition was driven by an explicit user gesture
+   * (e.g. clicking pause) rather than a buffer stall, hydration, or
+   * remote-state application. Receivers may use this to skip flicker-defence
+   * debounces and apply the transition without delay. Optional for
+   * backward-compatibility: legacy senders omit it; legacy receivers ignore it.
+   */
+  userInitiated?: boolean;
   playbackRate: number;
   updatedAt: number;
   serverTime: number;

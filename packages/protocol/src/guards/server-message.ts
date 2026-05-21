@@ -61,6 +61,8 @@ function isPlaybackState(value: unknown): value is PlaybackState {
     isPlaybackPlayState(value.playState) &&
     (value.syncIntent === undefined ||
       isPlaybackSyncIntent(value.syncIntent)) &&
+    (value.userInitiated === undefined ||
+      typeof value.userInitiated === "boolean") &&
     isFiniteNumber(value.playbackRate) &&
     isFiniteNumber(value.updatedAt) &&
     isFiniteNumber(value.serverTime) &&

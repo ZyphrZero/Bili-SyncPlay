@@ -247,8 +247,26 @@ export function createRoomStateApplyController(args: {
       }
     }
 
+    // A peer-marked user-initiated pause bypasses the flicker debounce: by
+    // convention the sender only sets the flag for explicit gestures (never
+    // for buffer-induced pauses or remote-state echoes), so we can apply
+    // immediately and avoid the visible 250ms lag that the debounce otherwise
+    // adds to legitimate user pauses. Any deferred paused already in flight
+    // is dropped so the immediate apply isn't undone by a stale timer.
+    const userInitiatedRemotePause =
+      !fromDebounce &&
+      state.playback &&
+      state.playback.playState === "paused" &&
+      state.playback.userInitiated === true &&
+      args.runtimeState.localMemberId !== null &&
+      state.playback.actorId !== args.runtimeState.localMemberId;
+    if (userInitiatedRemotePause) {
+      clearDeferredRemotePaused();
+    }
+
     if (
       !fromDebounce &&
+      !userInitiatedRemotePause &&
       remotePauseDebounceMs > 0 &&
       state.playback &&
       state.playback.playState === "paused" &&

@@ -56,12 +56,13 @@ export function createPlaybackBroadcastPayload(args: {
   currentTime: number;
   playState: PlaybackState["playState"];
   syncIntent?: PlaybackState["syncIntent"];
+  userInitiated?: boolean;
   playbackRate: number;
   actorId: string;
   seq: number;
   now: number;
 }): PlaybackState {
-  return {
+  const payload: PlaybackState = {
     url: args.currentVideo.url,
     currentTime: args.currentTime,
     playState: args.playState,
@@ -72,6 +73,57 @@ export function createPlaybackBroadcastPayload(args: {
     actorId: args.actorId,
     seq: args.seq,
   };
+  // Omit the field entirely (instead of serializing `false`) when not set, so
+  // we stay byte-identical to legacy senders on the wire for non-user pauses.
+  if (args.userInitiated) {
+    payload.userInitiated = true;
+  }
+  return payload;
+}
+
+/**
+ * Returns `true` when this broadcast represents a true user-driven pause
+ * (e.g. the user clicked pause on the player). False/undefined otherwise.
+ *
+ * The signal is consumed by peers to skip the remote-pause flicker debounce,
+ * so it must be conservative: any pause that *could* be buffer-induced,
+ * programmatic-apply-induced, or post-forced-pause must NOT be marked.
+ */
+export function deriveUserInitiatedPause(args: {
+  eventSource: LocalPlaybackEventSource;
+  playState: PlaybackState["playState"];
+  lastExplicitUserAction: {
+    kind: "play" | "pause" | "seek" | "ratechange";
+    at: number;
+  } | null;
+  lastForcedPauseAt: number;
+  programmaticApplyUntil: number;
+  programmaticApplyPlayState: PlaybackState["playState"] | null;
+  now: number;
+  userGestureGraceMs: number;
+}): boolean {
+  if (args.eventSource !== "pause" || args.playState !== "paused") {
+    return false;
+  }
+  if (
+    !args.lastExplicitUserAction ||
+    args.lastExplicitUserAction.kind !== "pause" ||
+    args.lastExplicitUserAction.at <= args.lastForcedPauseAt ||
+    args.now - args.lastExplicitUserAction.at >= args.userGestureGraceMs
+  ) {
+    return false;
+  }
+  // A programmatic remote-paused apply also fires a `pause` DOM event. Even
+  // though we usually suppress that broadcast via the programmatic guard,
+  // belt-and-braces: never tag the broadcast as user-initiated while a
+  // matching paused-apply window is still open.
+  if (
+    args.programmaticApplyPlayState === "paused" &&
+    args.now < args.programmaticApplyUntil
+  ) {
+    return false;
+  }
+  return true;
 }
 
 export function derivePlaybackSyncIntent(args: {
