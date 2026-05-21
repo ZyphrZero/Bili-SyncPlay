@@ -292,6 +292,7 @@ function createRoomStateWithPlayback(playback: {
   playState: "playing" | "paused" | "buffering";
   actorId: string;
   seq?: number;
+  userInitiated?: boolean;
 }) {
   return {
     roomCode: "ROOM01",
@@ -304,6 +305,9 @@ function createRoomStateWithPlayback(playback: {
       url: playback.url,
       currentTime: playback.currentTime,
       playState: playback.playState,
+      ...(playback.userInitiated !== undefined
+        ? { userInitiated: playback.userInitiated }
+        : {}),
       playbackRate: 1,
       updatedAt: 1,
       serverTime: 1,
@@ -623,6 +627,233 @@ test("deferred timer fires and applies paused when no playing arrives in window"
 
     assert.equal(harness.runtimeState.deferredRemotePausedState, null);
     assert.equal(harness.runtimeState.deferredRemotePausedTimerId, null);
+  } finally {
+    win.restore();
+  }
+});
+
+test("applies remote paused immediately when peer marks it userInitiated, bypassing debounce", async () => {
+  const win = installWindowTimerStub();
+  try {
+    const video = createStubVideo(false);
+    const harness = createController({
+      video,
+      now: 30_000,
+      remotePauseDebounceMs: 250,
+    });
+    harness.runtimeState.localMemberId = "local-member";
+
+    await harness.controller.applyRoomState(
+      createRoomStateWithPlayback({
+        url: "https://www.bilibili.com/video/BV1xx411c7mD?p=1",
+        currentTime: 42,
+        playState: "paused",
+        actorId: "remote-member",
+        seq: 5,
+        userInitiated: true,
+      }) as never,
+    );
+
+    // No defer timer is scheduled; the paused state is applied synchronously
+    // (the immediate apply path runs through to pendingPlaybackApplication).
+    assert.equal(harness.runtimeState.deferredRemotePausedState, null);
+    assert.equal(win.scheduled.length, 0);
+  } finally {
+    win.restore();
+  }
+});
+
+test("userInitiated remote paused cancels any already-deferred paused snapshot", async () => {
+  const win = installWindowTimerStub();
+  try {
+    const video = createStubVideo(false);
+    const harness = createController({
+      video,
+      now: 30_000,
+      remotePauseDebounceMs: 250,
+    });
+    harness.runtimeState.localMemberId = "local-member";
+
+    // First arrival: legacy peer (no userInitiated flag) → gets deferred.
+    await harness.controller.applyRoomState(
+      createRoomStateWithPlayback({
+        url: "https://www.bilibili.com/video/BV1xx411c7mD?p=1",
+        currentTime: 42,
+        playState: "paused",
+        actorId: "remote-member",
+        seq: 5,
+      }) as never,
+    );
+    assert.notEqual(harness.runtimeState.deferredRemotePausedState, null);
+    assert.equal(win.scheduled.length, 1);
+
+    // Second arrival: same actor with a strictly newer seq, now marked
+    // userInitiated. The upstream version-comparison block clears the
+    // older deferred snapshot, and the short-circuit then applies the
+    // newer state immediately so a stale timer can't fire later and
+    // overwrite the freshly-applied state.
+    await harness.controller.applyRoomState(
+      createRoomStateWithPlayback({
+        url: "https://www.bilibili.com/video/BV1xx411c7mD?p=1",
+        currentTime: 42,
+        playState: "paused",
+        actorId: "remote-member",
+        seq: 6,
+        userInitiated: true,
+      }) as never,
+    );
+
+    assert.equal(harness.runtimeState.deferredRemotePausedState, null);
+    assert.equal(harness.runtimeState.deferredRemotePausedTimerId, null);
+  } finally {
+    win.restore();
+  }
+});
+
+test("older userInitiated remote paused neither short-circuits nor overwrites the newer in-flight deferred", async () => {
+  const win = installWindowTimerStub();
+  try {
+    const video = createStubVideo(false);
+    let applyPending = 0;
+    const harness = createController({
+      video,
+      now: 30_000,
+      remotePauseDebounceMs: 250,
+      applyPendingPlaybackApplication: () => {
+        applyPending += 1;
+      },
+    });
+    harness.runtimeState.localMemberId = "local-member";
+
+    // First arrival: newer seq, no userInitiated → enters debounce.
+    await harness.controller.applyRoomState(
+      createRoomStateWithPlayback({
+        url: "https://www.bilibili.com/video/BV1xx411c7mD?p=1",
+        currentTime: 42,
+        playState: "paused",
+        actorId: "remote-member",
+        seq: 10,
+      }) as never,
+    );
+    assert.equal(
+      (
+        harness.runtimeState.deferredRemotePausedState as never as {
+          playback: { seq: number };
+        }
+      )?.playback.seq,
+      10,
+    );
+    assert.equal(win.scheduled.length, 1);
+    const newerDeferredRef = harness.runtimeState.deferredRemotePausedState;
+
+    // Second arrival: SAME actor but OLDER seq, with userInitiated=true.
+    // Models a delayed hydrate response landing after a newer realtime push.
+    // The short-circuit must NOT fire (would lose the deferred via immediate
+    // apply), AND the defer block must NOT overwrite the newer deferred
+    // (would invert ordering and let the older state fire 250ms later).
+    await harness.controller.applyRoomState(
+      createRoomStateWithPlayback({
+        url: "https://www.bilibili.com/video/BV1xx411c7mD?p=1",
+        currentTime: 42,
+        playState: "paused",
+        actorId: "remote-member",
+        seq: 8,
+        userInitiated: true,
+      }) as never,
+    );
+
+    assert.equal(applyPending, 0);
+    // Deferred slot must still point to the newer snapshot — same reference,
+    // same seq.
+    assert.equal(
+      harness.runtimeState.deferredRemotePausedState,
+      newerDeferredRef,
+    );
+    assert.equal(
+      (
+        harness.runtimeState.deferredRemotePausedState as never as {
+          playback: { seq: number };
+        }
+      )?.playback.seq,
+      10,
+    );
+    // No additional debounce timer was scheduled by the older arrival.
+    assert.equal(win.scheduled.length, 1);
+  } finally {
+    win.restore();
+  }
+});
+
+test("older non-userInitiated remote paused does not overwrite the newer in-flight deferred", async () => {
+  const win = installWindowTimerStub();
+  try {
+    const video = createStubVideo(false);
+    const harness = createController({
+      video,
+      now: 30_000,
+      remotePauseDebounceMs: 250,
+    });
+    harness.runtimeState.localMemberId = "local-member";
+
+    await harness.controller.applyRoomState(
+      createRoomStateWithPlayback({
+        url: "https://www.bilibili.com/video/BV1xx411c7mD?p=1",
+        currentTime: 42,
+        playState: "paused",
+        actorId: "remote-member",
+        seq: 10,
+      }) as never,
+    );
+    const newerDeferredRef = harness.runtimeState.deferredRemotePausedState;
+    assert.equal(win.scheduled.length, 1);
+
+    // Older paused without userInitiated must also be dropped, not be
+    // allowed to silently replace the newer deferred snapshot.
+    await harness.controller.applyRoomState(
+      createRoomStateWithPlayback({
+        url: "https://www.bilibili.com/video/BV1xx411c7mD?p=1",
+        currentTime: 42,
+        playState: "paused",
+        actorId: "remote-member",
+        seq: 8,
+      }) as never,
+    );
+
+    assert.equal(
+      harness.runtimeState.deferredRemotePausedState,
+      newerDeferredRef,
+    );
+    assert.equal(win.scheduled.length, 1);
+  } finally {
+    win.restore();
+  }
+});
+
+test("legacy remote paused (no userInitiated field) still goes through the debounce", async () => {
+  const win = installWindowTimerStub();
+  try {
+    const video = createStubVideo(false);
+    const harness = createController({
+      video,
+      now: 30_000,
+      remotePauseDebounceMs: 250,
+    });
+    harness.runtimeState.localMemberId = "local-member";
+
+    await harness.controller.applyRoomState(
+      createRoomStateWithPlayback({
+        url: "https://www.bilibili.com/video/BV1xx411c7mD?p=1",
+        currentTime: 42,
+        playState: "paused",
+        actorId: "remote-member",
+        seq: 5,
+      }) as never,
+    );
+
+    // Legacy senders omit the field → backward-compatible behavior preserved.
+    assert.notEqual(harness.runtimeState.deferredRemotePausedState, null);
+    assert.equal(win.scheduled.length, 1);
+    assert.equal(win.scheduled[0].ms, 250);
   } finally {
     win.restore();
   }
