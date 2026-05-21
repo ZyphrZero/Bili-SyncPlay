@@ -710,7 +710,7 @@ test("userInitiated remote paused cancels any already-deferred paused snapshot",
   }
 });
 
-test("userInitiated remote paused does NOT short-circuit when the incoming state is older than an in-flight deferred", async () => {
+test("older userInitiated remote paused neither short-circuits nor overwrites the newer in-flight deferred", async () => {
   const win = installWindowTimerStub();
   try {
     const video = createStubVideo(false);
@@ -735,14 +735,22 @@ test("userInitiated remote paused does NOT short-circuit when the incoming state
         seq: 10,
       }) as never,
     );
-    assert.notEqual(harness.runtimeState.deferredRemotePausedState, null);
+    assert.equal(
+      (
+        harness.runtimeState.deferredRemotePausedState as never as {
+          playback: { seq: number };
+        }
+      )?.playback.seq,
+      10,
+    );
     assert.equal(win.scheduled.length, 1);
+    const newerDeferredRef = harness.runtimeState.deferredRemotePausedState;
 
     // Second arrival: SAME actor but OLDER seq, with userInitiated=true.
-    // This models e.g. a delayed hydrate response landing after a newer
-    // realtime push. The upstream version-comparison block must preserve
-    // the in-flight deferred, and the short-circuit must NOT fire — taking
-    // it would lose the newer deferred snapshot via immediate apply.
+    // Models a delayed hydrate response landing after a newer realtime push.
+    // The short-circuit must NOT fire (would lose the deferred via immediate
+    // apply), AND the defer block must NOT overwrite the newer deferred
+    // (would invert ordering and let the older state fire 250ms later).
     await harness.controller.applyRoomState(
       createRoomStateWithPlayback({
         url: "https://www.bilibili.com/video/BV1xx411c7mD?p=1",
@@ -754,12 +762,68 @@ test("userInitiated remote paused does NOT short-circuit when the incoming state
       }) as never,
     );
 
-    // The short-circuit didn't run: no immediate apply, no new debounce
-    // timer fires before the existing one. The deferred slot is still
-    // populated (either by the original deferred, or by the defer block's
-    // overwrite — that pre-existing PR #120 behaviour is out of scope here;
-    // what we verify is that this PR did NOT bypass debounce on the older).
     assert.equal(applyPending, 0);
+    // Deferred slot must still point to the newer snapshot — same reference,
+    // same seq.
+    assert.equal(
+      harness.runtimeState.deferredRemotePausedState,
+      newerDeferredRef,
+    );
+    assert.equal(
+      (
+        harness.runtimeState.deferredRemotePausedState as never as {
+          playback: { seq: number };
+        }
+      )?.playback.seq,
+      10,
+    );
+    // No additional debounce timer was scheduled by the older arrival.
+    assert.equal(win.scheduled.length, 1);
+  } finally {
+    win.restore();
+  }
+});
+
+test("older non-userInitiated remote paused does not overwrite the newer in-flight deferred", async () => {
+  const win = installWindowTimerStub();
+  try {
+    const video = createStubVideo(false);
+    const harness = createController({
+      video,
+      now: 30_000,
+      remotePauseDebounceMs: 250,
+    });
+    harness.runtimeState.localMemberId = "local-member";
+
+    await harness.controller.applyRoomState(
+      createRoomStateWithPlayback({
+        url: "https://www.bilibili.com/video/BV1xx411c7mD?p=1",
+        currentTime: 42,
+        playState: "paused",
+        actorId: "remote-member",
+        seq: 10,
+      }) as never,
+    );
+    const newerDeferredRef = harness.runtimeState.deferredRemotePausedState;
+    assert.equal(win.scheduled.length, 1);
+
+    // Older paused without userInitiated must also be dropped, not be
+    // allowed to silently replace the newer deferred snapshot.
+    await harness.controller.applyRoomState(
+      createRoomStateWithPlayback({
+        url: "https://www.bilibili.com/video/BV1xx411c7mD?p=1",
+        currentTime: 42,
+        playState: "paused",
+        actorId: "remote-member",
+        seq: 8,
+      }) as never,
+    );
+
+    assert.equal(
+      harness.runtimeState.deferredRemotePausedState,
+      newerDeferredRef,
+    );
+    assert.equal(win.scheduled.length, 1);
   } finally {
     win.restore();
   }

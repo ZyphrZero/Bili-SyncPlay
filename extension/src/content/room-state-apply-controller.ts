@@ -277,6 +277,29 @@ export function createRoomStateApplyController(args: {
       args.runtimeState.localMemberId !== null &&
       state.playback.actorId !== args.runtimeState.localMemberId
     ) {
+      // Mirror the upstream version-comparison block: if a deferred snapshot
+      // is still present after that block ran, the incoming state was deemed
+      // older (or otherwise non-superseding). Overwriting the deferred slot
+      // here would invert the version ordering — the older state would fire
+      // 250ms later and clobber the newer one. Drop the incoming instead.
+      // This is especially important now that incoming paused can carry
+      // userInitiated:true: a delayed hydrate response landing after a newer
+      // realtime push must not get a "skip the debounce" express ticket via
+      // an overwrite-then-fire path.
+      const existingDeferred = args.runtimeState.deferredRemotePausedState;
+      const existingDeferredPlayback = existingDeferred?.playback;
+      if (existingDeferredPlayback) {
+        const incomingIsOlder =
+          state.playback.serverTime < existingDeferredPlayback.serverTime ||
+          (state.playback.serverTime === existingDeferredPlayback.serverTime &&
+            state.playback.seq < existingDeferredPlayback.seq);
+        if (incomingIsOlder) {
+          args.debugLog(
+            `Dropped incoming paused seq=${state.playback.seq} (older than deferred seq=${existingDeferredPlayback.seq})`,
+          );
+          return;
+        }
+      }
       if (args.runtimeState.deferredRemotePausedTimerId !== null) {
         cancelDeferTimer(args.runtimeState.deferredRemotePausedTimerId);
         args.runtimeState.deferredRemotePausedTimerId = null;
