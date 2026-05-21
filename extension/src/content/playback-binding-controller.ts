@@ -395,7 +395,28 @@ export function createPlaybackBindingController(args: {
           hasRecentUserGesture() &&
           args.runtimeState.lastUserGestureAt >
             args.runtimeState.lastForcedPauseAt;
-        const bufferInduced = recentBufferSignal && !userInitiatedPause;
+        // When applying a remote `paused`, we hard-seek then call `video.pause()`.
+        // The seek trips a `waiting` event milliseconds before the `pause`, so the
+        // buffer-signal window will look "fresh" even though no real stall occurred.
+        // Classifying this as buffer-induced would (a) escape the programmatic
+        // suppression (signature=paused vs broadcast=buffering) and leak the
+        // applied state back out, and (b) record lastLocalIntent=buffering,
+        // which blocks the peer's next `playing` via local-intent-guard for up
+        // to LOCAL_INTENT_GUARD_MS — the visible "resume takes a few seconds"
+        // symptom after a remote pause→play.
+        const programmaticSignature =
+          args.runtimeState.programmaticApplySignature;
+        const normalizedSharedUrl = args.normalizeUrl(currentVideo?.url);
+        const insideProgrammaticPausedWindow =
+          programmaticSignature !== null &&
+          programmaticSignature.playState === "paused" &&
+          now < args.runtimeState.programmaticApplyUntil &&
+          normalizedSharedUrl !== null &&
+          normalizedSharedUrl === programmaticSignature.url;
+        const bufferInduced =
+          !insideProgrammaticPausedWindow &&
+          recentBufferSignal &&
+          !userInitiatedPause;
         args.runtimeState.pauseStartedAt = now;
         args.runtimeState.pauseClassifiedAsBuffer = bufferInduced;
         clearBufferUpgradeTimer();

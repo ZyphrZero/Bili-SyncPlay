@@ -834,6 +834,128 @@ test("playback binding controller clears buffer-pause classification on resume",
   }
 });
 
+test("playback binding controller does not classify pause as buffer-induced inside a programmatic paused-apply window", () => {
+  const dom = installDomStub();
+  const runtimeState = createContentRuntimeState();
+  runtimeState.lastUserGestureAt = 0;
+  // Programmatic paused-apply is in flight: matches signature path used by
+  // room-state-apply-controller when applying a remote `paused`. Without the
+  // guard, the synthetic `waiting` event from the hard-seek would tag the
+  // following `pause` as buffer-induced and let it broadcast as `buffering`,
+  // which then blocks the peer's next `playing` via local-intent-guard.
+  runtimeState.programmaticApplyUntil = 5_500;
+  runtimeState.programmaticApplySignature = {
+    url: "https://www.bilibili.com/video/BV1xx411c7mD?p=1",
+    playState: "paused",
+    currentTime: 11.12,
+    playbackRate: 1,
+  };
+  let now = 5_000;
+  const originalSetTimeout = globalThis.window.setTimeout;
+  const scheduledTimers: Array<{ cb: () => void; ms: number }> = [];
+  globalThis.window.setTimeout = ((callback: TimerHandler, ms?: number) => {
+    if (typeof callback === "function") {
+      scheduledTimers.push({ cb: callback as () => void, ms: ms ?? 0 });
+    }
+    return scheduledTimers.length;
+  }) as typeof globalThis.window.setTimeout;
+
+  const controller = createPlaybackBindingController({
+    runtimeState,
+    videoBindIntervalMs: 250,
+    userGestureGraceMs: 1_200,
+    initialRoomStatePauseHoldMs: 3_000,
+    bufferSignalWindowMs: 300,
+    bufferPauseUpgradeMs: 1_500,
+    getSharedVideo: () => ({
+      videoId: "BV1xx411c7mD:p1",
+      url: "https://www.bilibili.com/video/BV1xx411c7mD?p=1",
+      title: "Video",
+    }),
+    hasRecentRemoteStopIntent: () => false,
+    normalizeUrl: (url) => url ?? null,
+    getLastBroadcastAt: () => 0,
+    broadcastPlayback: async () => {},
+    cancelActiveSoftApply: () => {},
+    maintainActiveSoftApply: () => {},
+    applyPendingPlaybackApplication: () => {},
+    activatePauseHold: () => {},
+    debugLog: () => {},
+    getNow: () => now,
+  });
+
+  try {
+    controller.attachPlaybackListeners();
+    // Synthetic waiting from hard-seek, then synthetic pause from video.pause().
+    dom.listeners.get("waiting")?.(new Event("waiting"));
+    assert.equal(runtimeState.lastBufferSignalAt, 5_000);
+    now = 5_120;
+    dom.video.paused = true;
+    dom.listeners.get("pause")?.(new Event("pause"));
+
+    assert.equal(runtimeState.pauseClassifiedAsBuffer, false);
+    assert.equal(runtimeState.pauseStartedAt, 5_120);
+    // No buffer-pause upgrade timer should have been armed.
+    assert.equal(
+      scheduledTimers.some((t) => t.ms === 1_500),
+      false,
+    );
+  } finally {
+    globalThis.window.setTimeout = originalSetTimeout;
+    dom.restore();
+  }
+});
+
+test("playback binding controller still classifies pause as buffer-induced when programmatic apply window has expired", () => {
+  const dom = installDomStub();
+  const runtimeState = createContentRuntimeState();
+  runtimeState.lastUserGestureAt = 0;
+  runtimeState.programmaticApplyUntil = 4_500; // already expired vs now=5_000
+  runtimeState.programmaticApplySignature = {
+    url: "https://www.bilibili.com/video/BV1xx411c7mD?p=1",
+    playState: "paused",
+    currentTime: 11.12,
+    playbackRate: 1,
+  };
+  let now = 5_000;
+
+  const controller = createPlaybackBindingController({
+    runtimeState,
+    videoBindIntervalMs: 250,
+    userGestureGraceMs: 1_200,
+    initialRoomStatePauseHoldMs: 3_000,
+    bufferSignalWindowMs: 300,
+    bufferPauseUpgradeMs: 1_500,
+    getSharedVideo: () => ({
+      videoId: "BV1xx411c7mD:p1",
+      url: "https://www.bilibili.com/video/BV1xx411c7mD?p=1",
+      title: "Video",
+    }),
+    hasRecentRemoteStopIntent: () => false,
+    normalizeUrl: (url) => url ?? null,
+    getLastBroadcastAt: () => 0,
+    broadcastPlayback: async () => {},
+    cancelActiveSoftApply: () => {},
+    maintainActiveSoftApply: () => {},
+    applyPendingPlaybackApplication: () => {},
+    activatePauseHold: () => {},
+    debugLog: () => {},
+    getNow: () => now,
+  });
+
+  try {
+    controller.attachPlaybackListeners();
+    dom.listeners.get("waiting")?.(new Event("waiting"));
+    now = 5_120;
+    dom.video.paused = true;
+    dom.listeners.get("pause")?.(new Event("pause"));
+
+    assert.equal(runtimeState.pauseClassifiedAsBuffer, true);
+  } finally {
+    dom.restore();
+  }
+});
+
 test("playback binding controller re-broadcasts paused after buffer-pause upgrade threshold", async () => {
   const dom = installDomStub();
   const runtimeState = createContentRuntimeState();
