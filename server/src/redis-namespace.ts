@@ -32,6 +32,14 @@ export function getRedisEventStreamKey(namespace?: string): string {
   return `${normalizeNamespaceBase(namespace)}events`;
 }
 
+export function getRedisEventCountsKey(namespace?: string): string {
+  return `${normalizeNamespaceBase(namespace)}event_counts`;
+}
+
+export function getRedisEventMinuteCountsKey(namespace?: string): string {
+  return `${normalizeNamespaceBase(namespace)}event_minute_counts`;
+}
+
 export function getRedisAuditStreamKey(namespace?: string): string {
   return `${normalizeNamespaceBase(namespace)}audit-logs`;
 }

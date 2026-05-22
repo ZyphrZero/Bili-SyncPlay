@@ -108,6 +108,83 @@ test("totalCountsByEvent persists counts after events are evicted from the ring 
   assert.equal(counts.nonexistent, 0);
 });
 
+test("countsByEventInWindow keeps accurate counts after the ring buffer evicts old entries", async () => {
+  const store = createEventStore(2);
+
+  await store.append({
+    event: "rate_limited",
+    timestamp: "2026-03-26T10:00:30.000Z",
+    data: { result: "blocked" },
+  });
+  await store.append({
+    event: "rate_limited",
+    timestamp: "2026-03-26T10:00:45.000Z",
+    data: { result: "blocked" },
+  });
+  // These two evict the earlier ring-buffer entries, but the minute bucket
+  // must still remember both rate_limited events from 10:00.
+  await store.append({
+    event: "room_joined",
+    timestamp: "2026-03-26T10:05:00.000Z",
+    data: { roomCode: "ROOM01", result: "ok" },
+  });
+  await store.append({
+    event: "rate_limited",
+    timestamp: "2026-03-26T10:07:00.000Z",
+    data: { result: "blocked" },
+  });
+
+  const now = Date.parse("2026-03-26T10:07:30.000Z");
+
+  const lastMinute = await store.countsByEventInWindow(
+    ["rate_limited", "room_joined"],
+    now - 60_000,
+    now,
+  );
+  assert.equal(lastMinute.rate_limited, 1);
+  assert.equal(lastMinute.room_joined, 0);
+
+  const lastTenMinutes = await store.countsByEventInWindow(
+    ["rate_limited", "room_joined"],
+    now - 10 * 60_000,
+    now,
+  );
+  assert.equal(lastTenMinutes.rate_limited, 3);
+  assert.equal(lastTenMinutes.room_joined, 1);
+
+  const queryResult = await store.query({
+    event: "rate_limited",
+    page: 1,
+    pageSize: 10,
+  });
+  assert.equal(queryResult.total, 1);
+});
+
+test("countsByEventInWindow drops buckets older than the 24-hour retention", async () => {
+  const store = createEventStore();
+
+  await store.append({
+    event: "rate_limited",
+    timestamp: "2026-03-26T10:00:00.000Z",
+    data: { result: "blocked" },
+  });
+  // Append something more than 24 hours later, which triggers pruning of the
+  // 10:00 bucket from the previous day.
+  await store.append({
+    event: "rate_limited",
+    timestamp: "2026-03-27T10:01:00.000Z",
+    data: { result: "blocked" },
+  });
+
+  const now = Date.parse("2026-03-27T10:01:30.000Z");
+  const lastDay = await store.countsByEventInWindow(
+    ["rate_limited"],
+    now - 24 * 60 * 60_000,
+    now,
+  );
+  assert.equal(lastDay.rate_limited, 1);
+});
+
 test("in-memory event store hides system events by default and can include them on demand", async () => {
   const store = createEventStore();
 

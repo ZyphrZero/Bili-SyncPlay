@@ -21,6 +21,8 @@ import { createRedisRuntimeStore } from "../redis-runtime-store.js";
 import {
   getRedisAdminCommandChannelPrefix,
   getRedisAdminCommandResultChannelPrefix,
+  getRedisEventCountsKey,
+  getRedisEventMinuteCountsKey,
   getRedisEventStreamKey,
   getRedisRoomEventChannel,
   getRedisRuntimeKeyPrefix,
@@ -317,6 +319,10 @@ export async function createServerBootstrapContext(
     dependencies.adminConfig?.eventStoreProvider === "redis"
       ? await createRedisEventStore(persistenceConfig.redisUrl, {
           streamKey: getRedisEventStreamKey(persistenceConfig.redisNamespace),
+          countsKey: getRedisEventCountsKey(persistenceConfig.redisNamespace),
+          minuteCountsKey: getRedisEventMinuteCountsKey(
+            persistenceConfig.redisNamespace,
+          ),
         })
       : createEventStore();
 

@@ -412,9 +412,8 @@ export function createPageLoaders(options) {
       const onlineNodes = (overview.nodes?.items || []).filter(
         (node) => node.health !== "offline",
       );
-      const lastHourEvents =
-        overview.events.lastHour || overview.events.lastMinute;
-      const lastDayEvents = overview.events.lastDay || overview.events.totals;
+      const lastHourEvents = overview.events.lastHour;
+      const lastDayEvents = overview.events.lastDay;
 
       return {
         autoRefresh: state.overviewAutoRefresh,

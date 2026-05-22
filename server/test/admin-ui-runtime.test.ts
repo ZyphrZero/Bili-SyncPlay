@@ -144,6 +144,18 @@ test("bootstrap redirects authenticated login route to overview", async () => {
             rate_limited: 0,
             ws_connection_rejected: 0,
           },
+          lastHour: {
+            room_created: 0,
+            room_joined: 0,
+            rate_limited: 0,
+            ws_connection_rejected: 0,
+          },
+          lastDay: {
+            room_created: 0,
+            room_joined: 0,
+            rate_limited: 0,
+            ws_connection_rejected: 0,
+          },
           totals: {
             room_created: 0,
             room_joined: 0,

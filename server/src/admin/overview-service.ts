@@ -87,20 +87,6 @@ export function createAdminOverviewService(options: {
 }) {
   const now = options.now ?? Date.now;
 
-  async function collectEventCounts(
-    fetcher: (eventName: string) => Promise<number>,
-  ): Promise<Record<(typeof OVERVIEW_EVENT_NAMES)[number], number>> {
-    const results = await Promise.all(
-      OVERVIEW_EVENT_NAMES.map(
-        async (name) => [name, await fetcher(name)] as const,
-      ),
-    );
-    return Object.fromEntries(results) as Record<
-      (typeof OVERVIEW_EVENT_NAMES)[number],
-      number
-    >;
-  }
-
   return {
     async getOverview() {
       const currentTime = now();
@@ -109,23 +95,21 @@ export function createAdminOverviewService(options: {
         lastHourEventCounts,
         lastDayEventCounts,
         totalEventCounts,
-      ] = await Promise.all([
+      ] = (await Promise.all([
         ...Object.values(EVENT_WINDOWS).map((windowMs) =>
-          collectEventCounts(async (name) => {
-            const result = await options.eventStore.query({
-              event: name,
-              from: currentTime - windowMs,
-              to: currentTime,
-              page: 1,
-              pageSize: 1,
-            });
-            return result.total;
-          }),
+          options.eventStore.countsByEventInWindow(
+            OVERVIEW_EVENT_NAMES,
+            currentTime - windowMs,
+            currentTime,
+          ),
         ),
-        options.eventStore.totalCountsByEvent(OVERVIEW_EVENT_NAMES) as Promise<
-          Record<(typeof OVERVIEW_EVENT_NAMES)[number], number>
-        >,
-      ]);
+        options.eventStore.totalCountsByEvent(OVERVIEW_EVENT_NAMES),
+      ])) as [
+        Record<(typeof OVERVIEW_EVENT_NAMES)[number], number>,
+        Record<(typeof OVERVIEW_EVENT_NAMES)[number], number>,
+        Record<(typeof OVERVIEW_EVENT_NAMES)[number], number>,
+        Record<(typeof OVERVIEW_EVENT_NAMES)[number], number>,
+      ];
       const totalNonExpired = await options.roomStore.countRooms({
         keyword: undefined,
         includeExpired: false,

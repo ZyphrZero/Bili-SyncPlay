@@ -11,7 +11,10 @@ import type { RuntimeEvent } from "./types.js";
 
 const DEFAULT_EVENT_STREAM_KEY = "bsp:events";
 const DEFAULT_EVENT_COUNTS_KEY = "bsp:event_counts";
+const DEFAULT_EVENT_MINUTE_COUNTS_KEY = "bsp:event_minute_counts";
 const DEFAULT_EVENT_STREAM_MAX_LEN = 1_000;
+const MINUTE_MS = 60_000;
+const MINUTE_BUCKET_RETENTION = 24 * 60;
 
 function normalizeNullable(value: string | undefined): string | null {
   return value && value.length > 0 ? value : null;
@@ -89,6 +92,7 @@ export async function createRedisEventStore(
   options: {
     streamKey?: string;
     countsKey?: string;
+    minuteCountsKey?: string;
     maxLen?: number;
   } = {},
 ): Promise<GlobalEventStore & { close: () => Promise<void> }> {
@@ -98,9 +102,12 @@ export async function createRedisEventStore(
   });
   const streamKey = options.streamKey ?? DEFAULT_EVENT_STREAM_KEY;
   const countsKey = options.countsKey ?? DEFAULT_EVENT_COUNTS_KEY;
+  const minuteCountsKey =
+    options.minuteCountsKey ?? DEFAULT_EVENT_MINUTE_COUNTS_KEY;
   const maxLen = options.maxLen ?? DEFAULT_EVENT_STREAM_MAX_LEN;
   let closing = false;
   let pendingAppend = Promise.resolve();
+  let lastPrunedMinute: number | null = null;
 
   await redis.connect();
 
@@ -126,6 +133,65 @@ export async function createRedisEventStore(
         }
         await redis.hset(countsKey, ...args);
       }
+    }
+  }
+
+  // Backfill minute buckets from existing stream entries if the hash does
+  // not exist yet. Stream only retains up to maxLen recent entries, but
+  // seeding gives the windowed counters something to start from instead of
+  // showing zero until new traffic arrives.
+  const minuteHashExists = await redis.exists(minuteCountsKey);
+  if (!minuteHashExists) {
+    const allEntries = await redis.xrange(streamKey, "-", "+");
+    if (allEntries.length > 0) {
+      const buckets = new Map<string, number>();
+      for (const [, fieldValues] of allEntries) {
+        let eventName: string | undefined;
+        let timestamp: string | undefined;
+        for (let i = 0; i < fieldValues.length; i += 2) {
+          const key = fieldValues[i];
+          const value = fieldValues[i + 1];
+          if (key === "event") {
+            eventName = value;
+          } else if (key === "timestamp") {
+            timestamp = value;
+          }
+        }
+        if (!eventName || !timestamp) continue;
+        const ts = Date.parse(timestamp);
+        if (!Number.isFinite(ts)) continue;
+        const minute = Math.floor(ts / MINUTE_MS);
+        const field = `${eventName}:${minute}`;
+        buckets.set(field, (buckets.get(field) ?? 0) + 1);
+      }
+      if (buckets.size > 0) {
+        const args: string[] = [];
+        for (const [field, count] of buckets) {
+          args.push(field, String(count));
+        }
+        await redis.hset(minuteCountsKey, ...args);
+      }
+    }
+  }
+
+  async function pruneMinuteBucketsIfNeeded(currentMinute: number) {
+    if (lastPrunedMinute === currentMinute) {
+      return;
+    }
+    lastPrunedMinute = currentMinute;
+    const oldestKept = currentMinute - MINUTE_BUCKET_RETENTION + 1;
+    const fields = await redis.hkeys(minuteCountsKey);
+    const stale: string[] = [];
+    for (const field of fields) {
+      const colon = field.lastIndexOf(":");
+      if (colon < 0) continue;
+      const minute = Number(field.slice(colon + 1));
+      if (Number.isFinite(minute) && minute < oldestKept) {
+        stale.push(field);
+      }
+    }
+    if (stale.length > 0) {
+      await redis.hdel(minuteCountsKey, ...stale);
     }
   }
 
@@ -227,10 +293,14 @@ export async function createRedisEventStore(
             "Redis did not return a stream id for appended event.",
           );
         }
+        const minute = Math.floor(Date.parse(timestamp) / MINUTE_MS);
+        const minuteField = `${input.event}:${minute}`;
         await Promise.all([
           redis.xtrim(streamKey, "MAXLEN", "=", maxLen),
           redis.hincrby(countsKey, input.event, 1),
+          redis.hincrby(minuteCountsKey, minuteField, 1),
         ]);
+        await pruneMinuteBucketsIfNeeded(minute);
 
         return {
           ...runtimeEvent,
@@ -260,6 +330,37 @@ export async function createRedisEventStore(
           values[i] ? parseInt(values[i], 10) : 0,
         ]),
       );
+    },
+    async countsByEventInWindow(
+      eventNames: readonly string[],
+      fromMs: number,
+      toMs: number,
+    ) {
+      if (eventNames.length === 0) {
+        return {};
+      }
+      await pendingAppend;
+      const fromMinute = Math.floor(fromMs / MINUTE_MS);
+      const toMinute = Math.floor(toMs / MINUTE_MS);
+      const wanted = new Set(eventNames);
+      const totals = Object.fromEntries(
+        eventNames.map((name) => [name, 0]),
+      ) as Record<string, number>;
+      const fields = await redis.hgetall(minuteCountsKey);
+      for (const [field, raw] of Object.entries(fields)) {
+        const colon = field.lastIndexOf(":");
+        if (colon < 0) continue;
+        const name = field.slice(0, colon);
+        if (!wanted.has(name)) continue;
+        const minute = Number(field.slice(colon + 1));
+        if (!Number.isFinite(minute)) continue;
+        if (minute < fromMinute || minute > toMinute) continue;
+        const value = Number.parseInt(raw, 10);
+        if (Number.isFinite(value)) {
+          totals[name] += value;
+        }
+      }
+      return totals;
     },
     async close() {
       closing = true;

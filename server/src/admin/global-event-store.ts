@@ -35,4 +35,9 @@ export type GlobalEventStore = {
   totalCountsByEvent: (
     eventNames: readonly string[],
   ) => Record<string, number> | Promise<Record<string, number>>;
+  countsByEventInWindow: (
+    eventNames: readonly string[],
+    fromMs: number,
+    toMs: number,
+  ) => Record<string, number> | Promise<Record<string, number>>;
 };
